@@ -415,6 +415,59 @@ __TBB_MACHINE_DEFINE_ATOMIC_SELECTOR_FETCH_STORE(8)
 #undef
 #endif 
 
+#if __TBB_USE_GENERIC_DWORD_LOAD_STORE
+
+#if ! __TBB_USE_FENCED_ATOMICS
+#define __TBB_machine_cmpswp8full_fence __TBB_machine_cmpswp8
+#endif
+
+__TBB_MACHINE_DEFINE_LOAD8_GENERIC_FENCED(full_fence)
+__TBB_MACHINE_DEFINE_STORE8_GENERIC_FENCED(full_fence)
+
+#if ! __TBB_USE_FENCED_ATOMICS
+#undef __TBB_machine_cmpswp8full_fence
+#endif
+
+#define __TBB_machine_store8 tbb::internal::__TBB_machine_generic_store8full_fence
+#define __TBB_machine_load8 tbb::internal::__TBB_machine_generic_load8full_fence
+#endif
+
+#if __TBB_USE_GENERIC_HALF_FENCED_LOAD_STORE
+/* Fenced operation use volatile qualifier to prevent compiler from optimizing them out,
+   and on architecture with weak memory ordering to induce compiler to generate code with
+   appropriate acquire/release semantics.
+
+   On architecture like IA32, Intel64, volatile has no effect on code gen,
+   and consistency helpers serve as a compiler fence. This code assumes that
+   the generated instructions will operate atomically.
+*/
+
+template<typename T, size_t S>
+struct machine_load_store {
+  static T load_with_acquire(const volatile T& location) {
+    T to_return = location;
+    __TBB_acquire_consistency_helper();
+    return to_return;
+  }
+  static void store_with_release(volatile T& location, T value) {
+    __TBB_release_consistency_helper();
+    location = value;
+  }
+};
+
+#if __TBB_WORDSIZE==4 && __TBB_64BIT_ATOMICS
+template<typename T>
+struct machine_load_store<T,8> {
+  static T load_with_acquire(const volatile T& location) {
+    return (T)__TBB_machine_load8((const volatile void*)&location);
+  }
+  static void store_with_release(volatile T& location, T value) {
+    __TBB_machine_store8((volatile void*)&location,(int64_t)value);
+  }
+};
+#endif
+#endif  
+  
 }
 }
 
