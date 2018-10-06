@@ -8,6 +8,8 @@
 #ifndef INCLUDE_TBB_INTERNAL__TBB_WINDEF_H_
 #define INCLUDE_TBB_INTERNAL__TBB_WINDEF_H_
 
+#include <iostream>
+
 /*
  * Check that the target Windows version has all API calls requires for TBB
  */
