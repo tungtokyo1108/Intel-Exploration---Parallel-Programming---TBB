@@ -538,7 +538,40 @@ struct machine_load_store_relaxed<T,8> {
 };
 
 #endif
-#endif  
+#endif 
+
+#undef __TBB_WORDSIZE
+
+template<typename T>
+inline T __TBB_load_with_acquire(const volatile T &location) {
+  return machine_load_store<T,sizeof(T)>::load_with_acquire(location);
+}
+
+template<typename T, typename V>
+inline void __TBB_store_with_release(volatile T& location, V value) {
+  machine_load_store<T,sizeof(T)>::store_with_release(location, T(value));
+}
+
+template<typename T>
+inline T __TBB_load_full_fence(const volatile T& location) {
+  return machine_load_store_seq_cst<T,sizeof(T)>::load(location);
+}
+
+template<typename T, typename V>
+inline void __TBB_store_full_fence(volatile T& location, V value) {
+  machine_load_store_seq_cst<T, sizeof(T)>::store(location,T(value));
+}
+
+template<typename T>
+inline T __TBB_load_relaxed(const volatile T& location) {
+  return machine_load_store_relaxed<T,sizeof(T)>::load(const_cast<T&>(location));
+}
+
+template<typename T, typename V>
+inline void __TBB_store_relaxed(volatile T& location, V value) {
+  machine_load_store_relaxed<T,sizeof(T)>::store(const_cast<T&>(location), T(value));
+}  
+  
 }
 }
 
