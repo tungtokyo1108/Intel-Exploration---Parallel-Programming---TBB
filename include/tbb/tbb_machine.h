@@ -466,8 +466,79 @@ struct machine_load_store<T,8> {
   }
 };
 #endif
-#endif  
+#endif    
   
+#if __TBB_USE_GENERIC_SEQUENTIAL_CONSISTENCY_LOAD_STORE
+
+template<typename T, size_t S>
+struct machine_load_store_seq_cst {
+  static T load(const volatile T& location) {
+    __TBB_full_memory_fence();
+    return machine_load_store<T,S>::load_with_acquire(location);
+  }
+  #if __TBB_USE_FETCHSTORE_AS_FULL_FENCED_STORE
+  static void store(volatile T& location, T value) {
+    atomic_selector<S>::fetch_store((volatile void*)&location,(typename atomic_selector<S>::word)value);
+  }
+  #else
+  static void store(volatile T& location, T value) {
+    machine_load_store<T,S>::store_with_release(location,value);
+    __TBB_full_memory_fence();
+  }
+  #endif
+};
+
+#if __TBB_WORDSIZE==4 && __TBB_64BIT_TOMICS
+template<typename T>
+struct machine_load_store_seq_cst<T,8> {
+  static T load (const volatile T& location) {
+    const int64_t anyvalue = 2305843009213693951LL;
+    return __TBB_machine_cmpswp8((volatile void*)const_cast<volatile T*>, anyvalue, anyvalue);
+  }
+  static void store(volatile T &location, T value) {
+    #if __TBB_GCC_VERSION >= 40702
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+    #endif
+    // An atomic initialization leads to reading of uninitialized memory
+    int64_t result = (volatile int64_t&)location;
+    #if __TBB_GCC_VERSION >= 40702
+    #pragma GCC diagnostic pop
+    #endif
+    while (__TBB_machine_cmpswp8((volatile void*)&location, (int64_t)value, result) != result)
+    result = (volatile int64_t&)location;
+  }
+};
+#endif
+#endif
+
+/*
+Relaxed operation add volatile qualifier to prevent compiler from optimizing them out
+*/
+#if __TBB_USE_GENERIC_RELAXED_LOAD_STORE
+template<typename T, size_t S>
+struct machine_load_store_relaxed {
+  static inline T load(const volatile T& location) {
+    return location;
+  }
+  static inline void store(volatile T& location, T value) {
+    location = value;
+  }
+};
+
+#if __TBB_WORDSIZE==4 && __TBB_64BIT_ATOMICS
+template<typename T>
+struct machine_load_store_relaxed<T,8> {
+  static inline T load(const volatile T& location) {
+    return (T)__TBB_machine_load8((const volatile void*)&location);
+  }
+  static inline void store(volatile T& location, T value) {
+    __TBB_machine_store8((volatile void*)&location, (int64_t)value);
+  }
+};
+
+#endif
+#endif  
 }
 }
 
