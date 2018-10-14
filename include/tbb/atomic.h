@@ -255,7 +255,7 @@ constexpr atomic_impl(value_type value):my_storage(value){}
     	);
     }
     
-value_type fetch_and_store(value_type value) {
+    value_type fetch_and_store(value_type value) {
     	return fetch_and_store<full_fence>(value);
     }
 
