@@ -255,10 +255,253 @@ constexpr atomic_impl(value_type value):my_storage(value){}
     	);
     }
     
-    
+value_type fetch_and_store(value_type value) {
+    	return fetch_and_store<full_fence>(value);
+    }
+
+    template<memory_semantics M>
+    value_type compare_and_swap(value_type value, value_type comparand) {
+    	return to_value<value_type>(
+    			internal::atomic_traits<sizeof(value_type),M>::compare_and_swap(&my_storage.my_value, to_bits(value), to_bits(comparand))
+    	);
+    }
+
+    value_type compare_and_swap(value_type value, value_type comparand) {
+    	return compare_and_swap<full_fence>(value,comparand);
+    }
+
+    operator value_type() const volatile {
+    	return to_value<value_type> (
+    			__TBB_load_with_acquire(to_bits_ref(my_storage.my_value))
+    	);
+    }
+
+    template<memory_semantics M>
+    value_type load() const {
+    	return to_value<value_type> (
+    			internal::atomic_load_store_traits<M>::load(to_bits_ref(my_storage.my_value))
+    	);
+    }
+
+    value_type load() const {
+    	return load<acquire>();
+    }
+
+    template<memory_semantics M>
+    void store(value_type value) {
+    	internal::atomic_load_store_traits<M>::store(to_bits_ref(my_storage.my_value),to_bits(value));
+    }
+
+    void store(value_type value) {
+    	store<release>(value);
+    }
+
+protected:
+    value_type store_with_release(value_type rhs) {
+    	__TBB_store_with_release(to_bits_ref(my_storage.my_value), to_bits(rhs));
+    	return rhs;
+    }
 };
 
+/*
+ * Base class that provides basic functionality for atomic<T> with fetch_and_add
+ * I is the underlying type
+ * D is the difference type
+ * StepType should be char if I is an integral type and T if I is a T*
+ */
 
+template<typename I, typename D, typename StepType>
+struct atomic_impl_with_arithmetic: atomic_impl<I> {
+public:
+	typedef I value_type;
+#if __TBB_ATOMIC_CTORS
+atomic_impl_with_arithmetic() = default;
+constexpr atomic_impl_with_arithmetic(value_type value) : atomic_impl<I>(value){}
+#endif
+
+    template<memory_semantics M>
+    value_type fetch_and_add(D addend) {
+    	return value_type(internal::atomic_traits<sizeof(value_type),M>::fetch_and_add(&this->my_storage.my_value, addend*sizeof(StepType)));
+    }
+
+    value_type fetch_and_add(D addend) {
+    	return fetch_and_add<full_fence>(addend);
+    }
+
+    template<memory_semantics M>
+    value_type fetch_and_increment() {
+    	return fetch_and_add<M>(1);
+    }
+
+    value_type fetch_and_increment() {
+    	return fetch_and_add(1);
+    }
+
+    template<memory_semantics M>
+    value_type fetch_and_decrement() {
+    	return fetch_and_add<M>(__TBB_MINUS_ONE(D));
+    }
+
+    value_type fetch_and_decrement() {
+    	return fetch_and_add(__TBB_MINUS_ONE(D));
+    }
+
+public:
+    value_type operator += (D value) {
+    	return fetch_and_add(value)+value;
+    }
+
+    value_type operator -= (D value) {
+    	return operator+=(D(0)-value);
+    }
+
+    value_type operator++() {
+    	return fetch_and_add(1)+1;
+    }
+
+    value_type operator--() {
+    	return fetch_and_add(__TBB_MINUS_ONE(D)) - 1;
+    }
+
+    value_type operator++(int) {
+    	return fetch_and_add(1);
+    }
+
+    value_type operator--(int) {
+    	return fetch_and_add(__TBB_MINUS_ONE(D));
+    }
+};
+
+}
+
+template<typename T>
+struct atomic: internal::atomic_impl<T> {
+#if __TBB_ATOMIC_CTORS
+    atomic() = default;
+    constexpr atomic(T arg): internal::atomic_impl<T>(arg) {}
+#endif
+    T operator = (T rhs) {
+      return this->store_with_release(rhs);
+    }
+    atomic<T>& operator=(const atomic<T>& rhs) {this->store_with_release(rhs); return *this;}
+};
+
+#if __TBB_ATOMIC_CTORS
+    #define __TBB_DECL_ATOMIC(T)                                                       \
+    template<> struct atomic<T>: internal::atomic_impl_with_arithmetic<T,T,char> {     \
+      atomic() = default;                                                              \
+      constexpr atomic(T arg): internal::atomic_impl_with_arithmetic<T,T,char>(arg) {} \
+                                                                                       \
+      T operator=(T rhs) {return store_with_release(rhs);}                             \
+      atomic<T>& operator=(const atomic<T>& rhs) {store_with_release(rhs); return *this;}\
+    };
+#else
+    #define __TBB_DECL_ATOMIC(T)                                                       \
+    template<> struct atomic<T>: internal::atomic_impl_with_arithmetic<T,T,char> {     \
+      T operator=(T rhs) {return store_with_release(rhs);}                             \
+      atomic<T>& operator=(const atomic<T>& rhs) {store_with_release(rhs); return *this;}\
+    };
+#endif
+
+#if __TBB_64BIT_ATOMICS
+__TBB_DECL_ATOMIC(__TBB_LONG_LONG)
+__TBB_DECL_ATOMIC(unsigned __TBB_LONG_LONG)
+#else
+__TBB_DECL_ATOMIC(long)
+__TBB_DECL_ATOMIC(unsigned long)
+#endif
+
+#if _MSC_VER && !_WIN64
+#if __TBB_ATOMIC_CTORS
+#define __TBB_DECL_ATOMIC_ALT(T,U)                                                    \
+template<> struct atomic<T>: internal::atomic_impl_with_arithmetic<T,T,char> {        \
+  atomic() = default;                                                                 \
+  constexpr atomic(T arg): internal::atomic_impl_with_arithmetic<T,T,char>(arg){}     \
+  T operator = (U rhs) {return store_with_release(T(rhs));}                           \
+  atomic<T>& operator=(const atomic<T>& rhs) {store_with_release(rhs); return *this;} \
+};
+#else
+#define __TBB_DECL_ATOMIC_ALT(T,U)                                                    \
+template<> struct atomic<T>: internal::atomic_impl_with_arithmetic<T,T,char> {        \
+  T operator=(U rhs) {return store_with_release(T(rhs));}                             \
+  atomic<T>& operator=(const atomic<T>& rhs) {store_with_release(rhs); return *this;} \
+};
+#endif
+__TBB_DECL_ATOMIC_ALT(unsigned,size_t)
+__TBB_DECL_ATOMIC_ALT(int,ptrdiff_t)
+#else
+__TBB_DECL_ATOMIC(unsigned)
+__TBB_DECL_ATOMIC(int)
+#endif
+
+__TBB_DECL_ATOMIC(unsigned short)
+__TBB_DECL_ATOMIC(short)
+__TBB_DECL_ATOMIC(char)
+__TBB_DECL_ATOMIC(signed char)
+__TBB_DECL_ATOMIC(unsigned char)
+
+#if !_MSC_VER || defined(_NATIVE_WCHAR_T_DEFINED)
+__TBB_DECL_ATOMIC(wchar_t)
+#endif
+
+template<typename T>struct atomic<T*>: internal::atomic_impl_with_arithmetic<T*,ptrdiff_t,T> {
+  #if __TBB_ATOMIC_CTORS
+  atomic() = default;
+  constexpr atomic(T* arg): internal::atomic_impl_with_arithmetic<T*,ptrdiff_t,T>(arg) {}
+  #endif
+  T *operator=(T* rhs) {
+    return this->store_with_release(rhs);
+  }
+  atomic<T*>& operator=(const atomic<T*>& rhs) {
+    this->store_with_release(rhs);
+    return *this;
+  }
+  T* operator->() const {
+    return (*this);
+  }
+};
+
+template<> struct atomic<void*>: internal::atomic_impl<void*> {
+  #if __TBB_ATOMIC_CTORS
+  atomic() = default;
+  constexpr atomic(void* arg): internal::atomic_impl<void*>(arg) {}
+  #endif
+  void *operator=(void*rhs) {
+    return this->store_with_release(rhs);
+  }
+  atomic<void*>& operator=(const atomic<void*>& rhs) {
+    this->store_with_release(rhs);
+    return *this;
+  }
+};
+
+template <memory_semantics M, typename T>
+T load (const atomic<T>& a) {return a.template load<M>();}
+
+template <memory_semantics M, typename T>
+void store(atomic<T>& a, T value) {a.template store<M>(value);}
+
+namespace interface6 {
+template<typename T>
+atomic<T> make_atomic(T t) {
+  atomic<T> a;
+  store<relaxed>(a,t);
+  return a;
+}
+}
+
+using interface6::make_atomic;
+namespace internal {
+template<memory_semantics M, typename T>
+void swap(atomic<T> & lhs, atomic<T> & rhs) {
+  T tmp = load<M>(lhs);
+  store<M>(lhs,load<M>(rhs));
+  store<M>(rhs,tmp);
+}
+template<typename T>
+inline atomic<T>& as_atomic(T&t) {
+  return (atomic<T>&)t;
+}
 }
 }
 
