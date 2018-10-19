@@ -45,16 +45,16 @@ namespace tbb {
 			size_t len;
 			mbstowcs_s(&len, wcs, bufsize, mbs, _TRUNCATE);
 			return len;
-#else 
+#else
 			size_t len = mbstowcs(wcs, mbs, bufsize);
 			if (wcs && len != size_t(-1))
 				wcs[len < bufsize - 1 ? len : bufsize - 1] = wchar_t('\0');
 			return len + 1;
-#endif 
+#endif
 		}
-#else 
+#else
 		void __TBB_EXPORTED_FUNC itt_set_sync_name_v3(void *obj, const char *name);
-#endif 
+#endif
 	}
 }
 
@@ -72,23 +72,23 @@ set_name(obj,wname);\
 delete[] wname; \
 }\
 }
-#else 
+#else
 #define __TBB_DEFINE_PROFILING_SET_NAME(sync_object_type) \
 namespace profiling {\
 inline void set_name(sync_object_type& obj, const char* name) {\
 tbb::internal::itt_set_sync_name_v3(&obj,name);\
 }\
 }
-#endif 
+#endif
 
-#else 
+#else
 #if _WIN32||_WIN64
 #define __TBB_DEFINE_PROFILING_SET_NAME(sync_object_type) \
 namespace profiling { \
 inline void set_name(sync_object_tpye&, const wchar_t*) {} \
 inline void set_name(sync_object_type&, const char*) {} \
 }
-#else 
+#else
 #define __TBB_DEFINE_PROFILING_SET_NAME(sync_object_type) \
 namespace profiling { \
 inline void set_name(sync_object_type&, const char*) {} \
@@ -122,14 +122,14 @@ namespace tbb {
 			void *parent, unsigned long long parent_extra, string_index name_index);
 		void __TBB_EXPORTED_FUNC itt_region_end_v9(itt_domain_enum domain, void *region, unsigned long long region_extra);
 
-		template<typename T, typename U>
-		inline void itt_store_word_with_release(tbb::atomic<T>& dst, U src) {
-#if TBB_USE_THREADING_TOOLS
-			__TBB_ASSERT(sizeof(T) == sizeof(void *), "Type must be word-sized.");
-			itt_store_pointer_with_release_v3(&dst, (void*)uintptr_t(src));
-#else 
-			dst = src;
-#endif 
+		template <typename T, typename U>
+		        inline void itt_store_word_with_release(tbb::atomic<T>& dst, U src) {
+		#if TBB_USE_THREADING_TOOLS
+		            __TBB_ASSERT(sizeof(T) == sizeof(void *), "Type must be word-sized.");
+		            itt_store_pointer_with_release_v3(&dst, (void *)uintptr_t(src));
+		#else
+		            dst = src;
+		#endif
 		}
 
 		template <typename T>
@@ -143,21 +143,21 @@ namespace tbb {
 			T result = (T)itt_load_pointer_with_acquire_v3(%src);
 #if defined(_MSC_VER) && !defined(__INTEL_COMPILER)
 #pragma warning (pop)
-#endif 
+#endif
 			return result;
-#else 
+#else
 			return src;
 #endif
 		}
 
-		template<typename T>
-		inline void itt_store_word_with_release(T& dst, T& src) {
-#if TBB_USE_THREADING_TOOLS
-			__TBB_ASSERT(sizeof(T) == sizeof(void *), "Type must be word-sized.");
-			itt_store_pointer_with_release_v3(&dst, (void *)src);
-#else 
-			__TBB_store_with_release(dst, src);
-#endif
+		template <typename T>
+		        inline void itt_store_word_with_release(T& dst, T src) {
+		#if TBB_USE_THREADING_TOOLS
+		            __TBB_ASSERT(sizeof(T) == sizeof(void *), "Type must be word-sized.");
+		            itt_store_pointer_with_release_v3(&dst, (void *)src);
+		#else
+		            __TBB_store_with_release(dst, src);
+		#endif
 		}
 
 		template<typename T>
@@ -169,12 +169,12 @@ namespace tbb {
 			return __TBB_load_with_acquire(src);
 		}
 
-		template<typename T> 
+		template<typename T>
 		inline void itt_hide_store_word(T& dst, T src) {
 #if TBB_USE_THREADING_TOOLS
 			__TBB_ASSERT(sizeof(T) == sizeof(void *), "Type must be word-sized.");
 			itt_store_pointer_with_release_v3(&dst, (void*)src);
-#else 
+#else
 			dst = src;
 #endif
 		}
@@ -184,9 +184,9 @@ namespace tbb {
 #if TBB_USE_THREADING_TOOLS
 			__TBB_ASSERT(sizeof(T) == sizeof(void *), "Type must be word-sized.");
 			return (T)itt_load_pointer_v3(&src);
-#else 
+#else
 			return src;
-#endif 
+#endif
 		}
 
 #if TBB_USE_THREADING_TOOLS
@@ -226,7 +226,7 @@ namespace tbb {
 		inline void itt_region_end(itt_domain_enum domain, void *region, unsigned long long region_extra) {
 			itt_region_end_v9(domain, region, region_extra);
 		}
-#else 
+#else
 		inline void call_itt_notify(notify_type /*t*/, void* /*ptr*/) {}
 
 		inline void itt_make_task_group(itt_domain_enum /*domain*/, void* /*group*/, unsigned long long /*group_extra*/,
@@ -262,7 +262,7 @@ Support user event traces through itt.
 Common use-case is tagging data flow graph tasks (data-id)
 and visualization by Intel Advisor Flow Graph Analyzer
 */
-			class event 
+			class event
 			{
 				const std::string my_name;
 				static void emit_trace(const std::string &input) {
