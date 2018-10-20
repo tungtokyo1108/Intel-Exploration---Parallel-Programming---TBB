@@ -147,7 +147,8 @@ stored_pack<Types...>save_pack(Types&&... types) {
 #if __TBB_CPP14_INTEGER_SEQUENCE_PRESENT
 using std::index_sequence;
 using std::make_index_sequence;
-#elif __TBB_CPP11_VARADIC_TEMPLATES_PRESENT && __TBB_CPP11_TEMPLATES_ALIASES_PRESENT
+// #elif __TBB_CPP11_VARADIC_TEMPLATES_PRESENT && __TBB_CPP11_TEMPLATES_ALIASES_PRESENT
+#else
 template <std::size_t... S> class index_sequence {};
 template <std::size_t N, std::size_t... S>
 struct make_index_sequence_impl : make_index_sequence_impl<N-1, N-1, S...> {};
@@ -158,7 +159,7 @@ struct make_index_sequence_impl <0, S...> {
 };
 
 template<std::size_t N>
-using make_index_sequence = typename tdd::internal::make_index_sequence_impl<N>::type:
+using make_index_sequence = typename tbb::internal::make_index_sequence_impl<N>::type;
 
 #endif
 
