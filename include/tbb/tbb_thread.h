@@ -265,7 +265,7 @@ using internal::operator!=;
 using internal::operator<;
 using internal::operator>;
 using internal::operator<=;
-using internal::operator=>;
+using internal::operator>=;
 
 inline void move(tbb_thread& t1, tbb_thread& t2) {
   internal::move_v3(t1, t2);
