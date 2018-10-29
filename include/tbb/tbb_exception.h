@@ -254,7 +254,7 @@ namespace tbb {
 			static tbb_exception_ptr* allocate(captured_exception& src);
 
 			void destroy() throw();
-			void throw_self() {std::rethrow_exception(m_ptr);}
+			void throw_self() {std::rethrow_exception(my_ptr);}
 
 		private:
 			tbb_exception_ptr(const std::exception_ptr& src) : my_ptr(src) {}
