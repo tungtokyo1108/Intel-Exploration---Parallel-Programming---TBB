@@ -380,9 +380,81 @@ public:
 	typedef std::random_access_iterator_tag iterator_category;
 };
 
-
-
+template <typename Container, typename T>
+vector_iterator<Container,T> operator+(ptrdiff_t offset, const vector_iterator<Container,T>&v) {
+	return vector_iterator<Container,T>(*v.my_vector, v.my_index+offset);
 }
+
+template <typename Container, typename T, typename U>
+bool operator==(const vector_iterator<Container,T>& i, const vector_iterator<Container,U>& j) {
+	return i.my_index == j.my_index && i.my_vector == j.my_vector;
+}
+
+template <typename Container, typename T, typename U>
+bool operator!=(const vector_iterator<Container,T>& i, const vector_iterator<Container,U>& j) {
+	return !(i=j);
+}
+
+template <typename Container, typename T, typename U>
+bool operator < (const vector_iterator<Container,T>& i, const vector_iterator<Container,U>& j) {
+	return i.my_index < j.my_index;
+}
+
+template <typename Container, typename T, typename U>
+bool operator > (const vector_iterator<Container,T>& i, const vector_iterator<Container,U>& j) {
+	return j < i;
+}
+
+template <typename Container, typename T, typename U>
+bool operator <= (const vector_iterator<Container,T>& i, const vector_iterator<Container,U>& j) {
+	return !(j<i);
+}
+
+template <typename Container, typename T, typename U>
+bool operator >= (const vector_iterator<Container,T>& i, const vector_iterator<Container,U>& j) {
+	return !(i<j);
+}
+
+template <typename Container, typename T, typename U>
+ptrdiff_t operator - (const vector_iterator<Container,T>& i, const vector_iterator<Container,U>& j) {
+	return ptrdiff_t(i.my_index) - ptrdiff_t(j.my_index);
+}
+
+template <typename T, class A>
+class allocator_base {
+public:
+	typedef typename A::template
+			rebind<T>::other allocator_type;
+	allocator_type my_allocator;
+	allocator_base(const allocator_type& a = allocator_type()) : my_allocator(a) {}
+};
+}
+
+template <typename T, class A>
+class concurrent_vector: protected internal::allocator_base<T,A>,
+                         private internal::concurrent_vector_base {
+private:
+	template <typename I>
+	class generic_range_type : public blocked_range<I> {
+	public:
+		typedef T value_type;
+		typedef T& reference;
+		typedef const T& const_reference;
+		typedef I iterator;
+		typedef ptrdiff_t difference_type;
+		generic_range_type(I begin_, I end_, size_t grainsize_ = 1) : blocked_range<I>(begin_, end_, grainsize_) {}
+		template <typename U>
+		generic_range_type(const generic_range_type<U>& r) : blocked_range<I>(r.begin(), r.end(), r.grainsize()) {}
+		generic_range_type(generic_range_type& r, split) : blocked_range<I>(r,split()) {}
+	};
+	
+	template <typename C, typename U>
+	friend class internal::vector_iterator;
+	
+	
+	
+};
+
 }
 
 #endif /* INCLUDE_TBB_CONCURRENT_VECTOR_H_ */
