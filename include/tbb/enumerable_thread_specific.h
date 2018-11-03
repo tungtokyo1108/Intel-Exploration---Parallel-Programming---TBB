@@ -795,13 +795,249 @@ void free_array(void* _ptr, size_t _size) __TBB_override {
 }
 
 
+public:
+typedef Allocator allocator_type;
+typedef T value_type;
+typedef T& reference;
+typedef const T& const_reference;
+typedef T* pointer;
+typedef const T* const_pointer;
+typedef typename internal_collection_type::size_type size_type;
+typedef typename internal_collection_type::difference_type difference_type;
 
-};
+typedef typename internal::enumerable_thread_specific_iterator<internal_collection_type, value_type> iterator;
+typedef typename internal::enumerable_thread_specific_iterator<internal_collection_type, const value_type> const_iterator;
 
+typedef generic_range_type<iterator> range_type;
+typedef generic_range_type<const_iterator> const_range_type;
 
+enumerable_thread_specific() : my_construct_callback (
+		internal::callback_leaf<T,internal::construct_by_default<T>>::make(0))
+{}
 
+template <typename Finit>
+explicit enumerable_thread_specific(Finit finit) : my_construct_callback (
+		internal::callback_leaf<T,internal::construct_by_finit<T,Finit>>::make(tbb::internal::move(finit)))
+{}
+
+explicit enumerable_thread_specific(const T& exemplar) : my_construct_callback(
+		internal::callback_leaf<T,internal::construct_by_exemplar<T>>::make(examplar))
+{}
+
+#if __TBB_ETS_USE_CPP11
+explicit enumerable_thread_specific(T&& exemplar) : my_construct_callback (
+		internal::callback_leaf<T,internal::construct_by_exemplar<T>>::make(std::move(exemplar)))
+{}
+
+template <typename P1, typename... P,
+          typename = typename internal::enable_if<!internal::is_callable_no_args<typename internal::strip<P1>::type>::value
+		  && !internal::is_compatible_ets<T,typename internal::strip<P1>::type>::value
+		  && !internal::is_same_type<T, typename internal::strip<P1>::type>::value>::value>
+enumerable_thread_specific( P1&& arg1, P&& ... args ) : my_construct_callback(
+            internal::callback_leaf<T,internal::construct_by_args<T,P1,P...> >::make( std::forward<P1>(arg1), std::forward<P>(args)... )
+){}
+#endif
+
+~enumerable_thread_specific() {
+	if (my_construct_callback) my_construct_callback->destroy();
+	this->internal::ets_base<ets_no_key>::table_clear();
 }
 
+// Return reference to local, discarding exists
+reference local() {
+	bool exists;
+	return local(exists);
+}
+
+// Return reference to calling thread's local copy
+reference local(bool& exists) {
+	void *ptr = this->table_lookup(exists);
+	return *(T*)ptr;
+}
+
+// Get the number of local copies
+size_type size() const {return my_locals.size();}
+
+bool empty() const {return my_locals.empty();}
+
+iterator begin() {return iterator(my_locals,0);}
+iterator end()   {return iterator(my_locals,my_locals.size());}
+
+const_iterator begin() const {return const_iterator(my_locals,0);}
+const_iterator end() const   {return const_iterator(my_locals, my_locals.size());}
+
+range_type range(size_t grainsize=1) {return range_type(begin(), end(), grainsize);}
+const_range_type range(size_t grainsize=1) const {return const_range_type(begin(), end(), grainsize);}
+
+void clear() {
+	my_locals.clear();
+	this->table_clear();
+}
+
+private:
+template <typename A2, ets_key_usage_type C2>
+void internal_copy(const enumerable_thread_specific<T,A2,C2>& other) {
+#if __TBB_ETS_USE_CPP11 && TBB_USE_ASSERT
+            // this tests is_compatible_ets
+            __TBB_STATIC_ASSERT( (internal::is_compatible_ets<T, typename internal::strip<decltype(other)>::type>::value), "is_compatible_ets fails" );
+#endif
+     my_construct_callback = other.my_construct_callback->clone();
+     __TBB_ASSERT(my_locals.size() == 0, NULL);
+     my_locals.reserve(other.size());
+     this->table_elementwise_copy(other,create_local_by_copy);
+}
+
+void internal_swap(enumerable_thread_specific& other) {
+	using std::swap;
+	__TBB_ASSERT(this != &other, NULL);
+	swap(my_construct_callback, other.my_construct_callback);
+	swap(my_locals, other.my_locals);
+	this->internal::ets_base<ETS_key_type>::table_swap(other);
+}
+
+#if __TBB_ETS_USE_CPP11
+        template<typename A2, ets_key_usage_type C2>
+        void internal_move(enumerable_thread_specific<T, A2, C2>&& other) {
+#if TBB_USE_ASSERT
+            // this tests is_compatible_ets
+            __TBB_STATIC_ASSERT( (internal::is_compatible_ets<T, typename internal::strip<decltype(other)>::type>::value), "is_compatible_ets fails" );
+#endif
+            my_construct_callback = other.my_construct_callback;
+            other.my_construct_callback = NULL;
+            __TBB_ASSERT(my_locals.size()==0,NULL);
+            my_locals.reserve(other.size());
+            this->table_elementwise_copy( other, create_local_by_move );
+        }
+#endif
+
+public:
+        enumerable_thread_specific(const enumerable_thread_specific& other)
+        : internal::ets_base<ETS_key_type>()
+		{
+        	internal_copy(other);
+		}
+
+        template <typename Alloc, ets_key_usage_type Cachetype>
+        enumerable_thread_specific(const enumerable_thread_specific<T,Alloc,Cachetype>& other)
+		{
+        	internal_copy(other);
+		}
+
+#if __TBB_ETS_USE_CPP11
+        enumerable_thread_specific(enumerable_thread_specific&& other) : my_construct_callback()
+        {
+        	internal_swap(other);
+        }
+
+        template <typename Alloc, ets_key_usage_type Cachetype>
+        enumerable_thread_specific(enumerable_thread_specific<T,Alloc,Cachetype>&& other) : my_construct_callback()
+        {
+        	internal_move(std::move(other));
+        }
+#endif
+
+        enumerable_thread_specific& operator=(const enumerable_thread_specific& other)
+        {
+        	if (this != &other)
+        	{
+        		this->clear();
+        		my_construct_callback->destroy();
+        		internal_copy(other);
+        	}
+        	return *this;
+        }
+
+        template <typename Alloc, ets_key_usage_type Cachetype>
+        enumerable_thread_specific& operator=(const enumerable_thread_specific<T, Alloc, Cachetype>& other)
+        {
+        	__TBB_ASSERT( static_cast<void*>(this)!=static_cast<const void*>(&other), NULL );
+        	this->clear();
+        	my_construct_callback->destroy();
+        	internal_copy(other);
+        	return *this;
+        }
+
+#if __TBB_ETS_USE_CPP11
+        enumerable_thread_specific& operator=( enumerable_thread_specific&& other )
+        {
+            if( this != &other )
+                internal_swap(other);
+            return *this;
+        }
+
+        template<typename Alloc, ets_key_usage_type Cachetype>
+        enumerable_thread_specific& operator=( enumerable_thread_specific<T, Alloc, Cachetype>&& other )
+        {
+            __TBB_ASSERT( static_cast<void*>(this)!=static_cast<const void*>(&other), NULL ); // Objects of different types
+            this->clear();
+            my_construct_callback->destroy();
+            internal_move(std::move(other));
+            return *this;
+        }
+#endif
+
+        template <typename combine_func_t>
+        T combine(combine_func_t f_combine) {
+        	if (begin() == end())
+        	{
+        		internal::ets_element<T> location;
+        		my_construct_callback->construct(location.value());
+        		return *location.value_committed();
+        	}
+        	const_iterator ci = begin();
+        	T my_result = *ci;
+        	while (++ci != end())
+        	{
+        		my_result = f_combine(my_result, *ci);
+        	}
+        	return my_result;
+        }
+
+        template <typename combine_func_t>
+        void combine_each(combine_func_t f_combine) {
+        	for (iterator ci = begin(); ci != end(); ++ci)
+        		f_combine(*ci);
+        }
+};
+
+template <typename Container>
+class flattened2d {
+	typedef typename Container::value_type conval_type;
+
+public:
+	typedef typename conval_type::size_type size_type;
+	typedef typename conval_type::difference_type difference_type;
+	typedef typename conval_type::allocator_type allocator_type;
+	typedef typename conval_type::value_type value_type;
+	typedef typename conval_type::reference reference;
+	typedef typename conval_type::const_reference const_reference;
+	typedef typename conval_type::pointer pointer;
+    typedef typename conval_type::const_pointer const_pointer;
+
+    typedef typename internal::segmented_iterator<Container, value_type> iterator;
+    typedef typename internal::segmented_iterator<Container, const value_type> const_iterator;
+
+    flattened2d(const Container &c, typename Container::const_iterator b, typename Container::const_iterator e) :
+    	my_container(const_cast<Container*>(&c), my_begin(b), my_end(e))
+    {}
+
+    explicit flattened2d(const Container &c) :
+    	my_container(const_cast<Container*>(&c)), my_begin(c.begin()), my_end(c.end())
+    {}
+
+    iterator begin() {return iterator(*my_container) = my_begin;}
+    iterator end()   {return iterator(*my_container) = my_end;}
+
+    const_iterator begin() const {return const_iterator(*my_container) = my_begin;}
+    const_iterator end()   const {return const_iterator(*my_container) = my_end;}
+
+private:
+    Container* my_container;
+    typename Container::const_iterator my_begin;
+    typename Container::const_iterator my_end;
+};
+
+}
 }
 
 #endif /* INCLUDE_TBB_ENUMERABLE_THREAD_SPECIFIC_H_ */
