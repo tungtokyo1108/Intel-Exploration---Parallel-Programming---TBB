@@ -142,6 +142,83 @@ namespace tbb
                 {
                     return reinterpret_cast<uintptr_t>(ptr) > uintptr_t(63);
                 }
+                
+                static void init_buckets(segment_ptr_t ptr, size_type sz, bool is_initial)
+                {
+                    if (is_initial) std::memset(static_cast<void*>(ptr), 0, sz*sizeof(bucket));
+                    else for (size_type i = 0; i < sz; i++, ptr++) {
+                        *reinterpret_cast<intptr_t*>(&ptr->mutex) = 0;
+                        ptr->node_list = rehash_req;
+                    }
+                }
+
+                static void add_to_bucket(bucket *b, node_base *n) 
+                {
+                    __TBB_ASSERT(b->node_list != rehash_req, NULL);
+                    n->next = b->node_list;
+                    b->node_list = n;
+                }
+
+                struct enable_segment_failsafe : tbb::internal::no_copy {
+                    segment_ptr_t *my_segment_ptr;
+                    enable_segment_failsafe(segement_table_t &table, segment_index_t k) : my_segment_ptr(&table[k]) {} 
+                    ~enable_segment_failsafe() {
+                        if (my_segment_ptr) *my_segment_ptr = 0;
+                    }
+                };
+
+                void enable_segment(segment_index_t k, bool is_initial = false)
+                {
+                    __TBB_ASSERT(k, "Zero segment must be embedded");
+                    enable_segment_failsafe watchdog(my_table, k);
+                    cache_aligned_allocator<bucket> alloc;
+                    size_type sz;
+                    __TBB_ASSERT(!is_valid(my_table[k]), "Wrong concurrent assigment");
+                    if (k >= first_block)
+                    {
+                        sz = segment_size(k);
+                        segment_ptr_t ptr = alloc.allocate(sz);
+                        init_buckets(ptr, sz, is_initial);
+                        itt_hide_store_word(my_table[k], ptr);
+                        sz <= 1;
+                    }
+                    else
+                    {
+                        __TBB_ASSERT(k == embedded_block, "Wrong segment index");
+                        sz = segment_size(first_block);
+                        segment_ptr_t ptr = alloc.allocate(sz - embedded_buckets);
+                        init_buckets(ptr, sz - embedded_buckets, is_initial);
+                        ptr -= segment_base(embedded_block);
+                        for (segment_index_t i = embedded_block; i < first_block; i++)
+                        {
+                            itt_hide_store_word(my_table[i], ptr + segment_base(i));
+                        }
+                    }
+                    itt_store_word_with_release(my_mask, sz - 1);
+                    watchdog.my_segment_ptr = 0;
+                }
+
+                bucket *get_bucket(hashcode_t h) const throw ()
+                {
+                    segment_index_t s = segment_index_of(h);
+                    h -= segment_base(s);
+                    segment_ptr_t seg = my_table[s];
+                    __TBB_ASSERT(is_valid(seg), "hashcode must be cut by valid mask for allocated segement");
+                    return &seg[h];
+                }
+
+                void mark_rehashed_levels(hashcode_t h) throw() {
+                    segment_index_t s = segment_index_of(h);
+                    while (segment_ptr_t seg = my_table[++s])
+                    {
+                        if (seg[h].node_list == rehash_req)
+                        {
+                            seq[h].node_list = empty_rehashed;
+                            mask_rehashed_levels(h + ((hashcode_t)1<<s));
+                        }
+                    }
+                }
+                
             };
         }
     }  
