@@ -219,9 +219,84 @@ namespace tbb
                     }
                 }
                 
+                inline bool check_mask_race(const hashcode_t h, hashcode_t &m) const
+                {
+                    hashcode_t m_now, m_old = m;
+                    m_now = (hashcode_t) itt_load_word_with_acquire(my_mask);
+                    if (m_old != m_now)
+                    {
+                        return check_rehashing_collision(h, m_old, m = m_now);
+                    }
+                    return false;
+                }
+
+                bool check_rehashing_collision(const hashcode_t h, const hashcode_t m_old, hashcode_t m) const {
+                    __TBB_ASSERT(m_old != m, NULL);
+                    if ((h & m_old) != (h & m))
+                    {
+                        for (++m_old; !(h & m_old); m_old <<= 1)
+                        ;
+                        m_old = (m_old << 1) - 1;
+                        __TBB_ASSERT((m_old&(m_old+1))==0 && m_old <= m, NULL);
+                        if (itt_load_word_with_acquire(get_bucket(h & m_old)->node_list) != rehash_req)
+                        {
+                            #if __TBB_STATISTICS
+                            my_info_restarts++;
+                            #endif
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+
+                segment_index_t insert_new_node(bucket *b, node_base *n, hashcode_t mask)
+                {
+                    // prefix form is to enforce allocation after the first item inserted 
+                    size_type sz = ++my_size;
+                    add_to_bucket(b,n);
+                    if (sz >= mask)
+                    {
+                        segment_index_t new_seg = __TBB_Log2(mask + 1);
+                        __TBB_ASSERT(is_valid(my_table[new_seg-1]), "new allocations must to publish new mask until segment has allocated");
+                        static const segment_ptr_t is_allocating = (segment_ptr_t)2;
+                        if (!itt_hide_load_word(my_table[new_seg])
+                            && as_atomic(my_table[new_seg]).compare_and_swap(is_allocating, NULL) == NULL) 
+                        {
+                            return new_seg;
+                        }
+                    }
+                    return 0;
+                }
+
+                /* Prepare enough segments for number of buckets */
+                void reserve(size_type buckets)
+                {
+                    if (!bucket--) return;
+                    bool is_initial = !my_size;
+                    for (size_type m = my_task; buckets > m; m = my_mask)
+                    {
+                        enable_segment(segment_index_of(m+1), is_initial);
+                    }
+                }
+
+                void internal_swap(hash_map_base &table)
+                {
+                    using std::swap;
+                    swap(this->my_mask, table.my_mask);
+                    swap(this->my_size, table.my_size);
+                    for (size_type i = 0; i < embedded_buckets; i++)
+                    {
+                        swap(this->my_embedded_segment[i].node_list, table.my_embedded_segment[i].node_list);
+                    }
+                    for (size_type i = embedded_block; i < pointers_per_table; i++)
+                    {
+                        swap(this->my_table[i], table.my_table[i]);
+                    }
+                }
             };
+
+            
         }
     }  
 }
-
 #endif /* INCLUDE_TBB_CONCURRENT_HASH_MAP_H_ */
