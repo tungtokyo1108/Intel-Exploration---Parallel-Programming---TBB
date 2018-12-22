@@ -295,6 +295,110 @@ namespace tbb
                 }
             };
 
+            template <typename Iterator>
+            class hash_map_range;    
+
+            /**
+             * Meets requirements of a forward iterator for STL
+             * Value is either the T or const T type of the container 
+             * Ingroup container 
+            */ 
+           template <typename Container, typename Value>
+           class hash_map_iterator : public std::iterator<std::forward_iterator_tag,Value>
+           {
+               typedef Container map_type;
+               typedef typename Container::node node;
+               typedef hash_map_base::node_base node_base;
+               typedef hash_map_base::bucket bucket;
+
+               template <typename C, typename T, typename U>
+               friend bool operator==(const hash_map_iterator<C,T>& i, const hash_map_iterator<C,U>& j);
+
+               template <typename C, typename T, typename U>
+               friend bool operator!=(const hash_map_iterator<C,T>& i, const hash_map_iterator<C,U>& j);
+
+               template <typename C, typename T, typename U>
+               friend ptrdiff_t operator-(const hash_map_iterator<C,T>& i, const hash_map_iterator<C,U>& j);
+
+               template <typename C, typename U>
+               friend class hash_map_iterator;
+
+               template <typename I>
+               friend class hash_map_range;
+
+               void advance_to_next_bucket()
+               {
+                   size_t k = my_index + 1;
+                   __TBB_ASSERT(my_bucket, "advancing an invalid iterator?");
+                   while (k <= my_map->my_mask)
+                   {
+                       if (k&(k-2))
+                       {
+                           ++my_bucket;
+                       }
+                       else
+                       {
+                           my_bucket = my_map->get_bucket(k);
+                       }
+                       my_node = static_cast<node*>(my_bucket->node_list);
+                       if (hash_map_base::is_valid(my_node))
+                       {
+                           my_index = k;
+                           return;
+                       }
+                       ++k;
+                   }
+                   my_bucket = 0;
+                   my_node = 0;
+                   my_index = k;
+               }
+               #if !defined(_MSC_VER) || defined(__INTEL_COMPILER)
+               template <typename Key, typename T, typename HashCompare, typename A>
+               friend class interface5::concurrent_hash_map;
+               #else
+               public: 
+               #endif
+
+               /* Concurrent_hash_map over which we are iterating */
+               const Container *my_map;
+
+               /* Index in hash table for current item */
+               size_t my_index;
+
+               /* Pointer to bucket */
+               const bucket *my_bucket;
+
+               /* Pointer to node that has current item */
+               node *my_node;
+
+               hash_map_iterator(const Container &map, size_t index, const bucket *b, node_base *n);
+
+               public:
+               hash_map_iterator() : my_map(), my_index(), my_bucket(), my_node() {}
+               hash_map_iterator(const hash_map_iterator<Container, typename Container::value_type> &other) :
+                   my_map(other.my_map),
+                   my_index(other.my_index),
+                   my_bucket(other.my_bucket),
+                   my_node(other.my_node)
+               {}
+
+               Value& operator*() const {
+                   __TBB_ASSERT(hash_map_base::is_valid(my_node), "iterator uninitialized or at end of container?");
+                   return my_node->item;
+               }   
+
+               Value* operator->() const {
+                   return &operator*();
+               }
+               hash_map_iterator& operator++();
+
+               hash_map_iterator operator++(int) {
+                   hash_map_iterator old(*this);
+                   operator++();
+                   return old;
+               }
+           };
+            
             
         }
     }  
