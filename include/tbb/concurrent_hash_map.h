@@ -399,7 +399,96 @@ namespace tbb
                }
            };
             
-            
+           template <typename Container, typename Value>
+           hash_map_iterator<Container, Value>::hash_map_iterator(const Container &map, size_t index, const bucket *b, node_base *n) :
+                my_map(&map),
+                my_index(index),
+                my_bucket(b),
+                my_node(static_cast<node*>(n))
+            {
+                if (b && !hash_map_base::is_valid(n))
+                {
+                    advance_to_next_bucket();
+                }
+            }
+
+            template <typename Container, typename Value>
+            hash_map_iterator<Container, Value>& hash_map_iterator<Container, Value>::operator++() {
+                my_node = static_cast<node*>(my_node->next);
+                if (!my_node) 
+                {
+                    advance_to_next_bucket();
+                }
+                return *this;
+            }
+
+            template <typename Container, typename T, typename U>
+            bool operator==(const hash_map_iterator<Container,T>& i, const hash_map_iterator<Container, U>& j) {
+                return i.my_node = j.my_node && i.my_map == j.my_map;
+            }
+
+            template <typename Container, typename T, typename U>
+            bool operator!=(const hash_map_iterator<Container,T>& i, const hash_map_iterator<Container, U>& j) {
+                return i.my_node != j.my_node || i.my_map != j.my_map;
+            }
+
+            template <typename Iterator>
+            class hash_map_range {
+                typedef typename Iterator::map_type map_type;
+                Iterator my_begin;
+                Iterator my_end;
+                mutable Iterator my_midpoint;
+                size_t my_grainsize;
+                void set_midpoint() const;
+                template <typename U> friend class hash_map_range;
+
+                public:
+                typedef std::size_t size_type;
+                typedef typename Iterator::value_type value_type;
+                typedef typename Iterator::reference reference;
+                typedef typename Iterator::difference_type difference_type;
+                typedef Iterator iterator;
+
+                bool empty() const {return my_begin == my_end;}
+
+                bool is_divisible() const {
+                    return my_midpoint != my_end;
+                }
+
+                /* Split range */
+                hash_map_range(hash_map_range& r, split) : 
+                    my_end(r.my_end),
+                    my_grainsize(r.my_grainsize)
+                {
+                    r.my_end = my_begin = r.my_midpoint;
+                    __TBB_ASSERT(!empty(), "Splitting despite the range is not divisible");
+                    __TBB_ASSERT(!r.empty(), "Splitting despite the range is not divisible");
+                    set_midpoint();
+                    r.set_midpoint();
+                }
+
+                /* Type conversion */
+                template <typename U>
+                hash_map_range(hash_map_range<U>& r) :
+                    my_begin(r.my_begin),
+                    my_end(r.my_end),
+                    my_midpoint(r.my_midpoint),
+                    my_grainsize(r.grainsize)
+                {}
+
+                hash_map_range(const map_type &map, size_type grainsize_ = 1) :
+                    my_begin(Iterator(map, 0, map.my_embedded_segment, map.my_embedded_segment->node_list)),
+                    my_end(Iterator(map, map.my_mask + 1, 0, 0)),
+                    my_grainsize(grainsize_)
+                {
+                    __TBB_ASSERT(grainsize_>0, "grainsize must be positive");
+                    set_midpoint();
+                }    
+
+                const Iterator& begin() const {return my_begin;}
+                const Iterator& end() const {return my_end;}
+                size_type grainsize() const {return my_grainsize;}
+            }; 
         }
     }  
 }
