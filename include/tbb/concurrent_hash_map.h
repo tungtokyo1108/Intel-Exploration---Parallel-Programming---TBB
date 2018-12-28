@@ -489,6 +489,66 @@ namespace tbb
                 const Iterator& end() const {return my_end;}
                 size_type grainsize() const {return my_grainsize;}
             }; 
+            
+            template <typename Iterator>
+            void hash_map_range<Iterator>::set_midpoint() const {
+                // Split by groups of nodes
+                size_t m = my_end.my_index - my_begin.my_index;
+                if (m > my_grainsize)
+                {
+                    m = my_begin.my_index + m/2u;
+                    hash_map_base::bucket *b = my_begin.my_map->get_bucket(m);
+                    my_midpoint = Iterator(*my_begin.my_map,m,b,b->node_list);
+                }
+                else
+                {
+                    my_midpoint = my_end;
+                }
+                __TBB_ASSERT(my_begin.my_index <= my_midpoint.my_index,
+                    "my_begin is after my_midpoint");
+                __TBB_ASSERT(my_midpoint.my_index <= my_end.my_index, 
+                    "my_midpoint is after my_end");
+                __TBB_ASSERT(my_begin != my_midpoint || my_begin == my_end, 
+                    "[my_begin, my_midpoint) range should not be empty");
+            }
+        }
+        
+        #if _MSC_VER && !defined(__INTEL_COMPILER)
+        #pragma warning(push)
+        #pragma warning(disable: 4127)
+        #endif
+        
+        /**
+         * Unordered map from Key to T
+        */
+        template <typename Key, typename T, typename HashCompare, typename Allocator>
+        class concurrent_hash_map : protected internal::hash_map_base {
+            template<typename Container, typename Value>
+            friend class internal::hash_map_iterator;
+
+            template <typename I>
+            friend class internal::hash_map_range;
+
+            public:
+            typedef Key key_type;
+            typedef T mapped_type;
+            typedef std::pair<const Key, T> value_type;
+            typedef hash_map_base::size_type size_type;
+            typedef ptrdiff_t difference_type;
+            typedef value_type *pointer;
+            typedef const value_type *const_pointer;
+            typedef value_type &reference;
+            typedef const value_type &const_reference;
+            typedef internal::hash_map_iterator<concurrent_hash_map, value_type> iterator;
+            typedef internal::hash_map_iterator<concurrent_hash_map, const value_type> const_iterator;
+            typedef internal::hash_map_range<iterator> range_type;
+            typedef internal::hash_map_range<const_iterator> const_range_type;
+            typedef Allocator allocator_type;
+
+            protected: 
+            friend class const_accessor;
+            
+
         }
     }  
 }
