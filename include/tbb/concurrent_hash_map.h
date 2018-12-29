@@ -547,8 +547,28 @@ namespace tbb
 
             protected: 
             friend class const_accessor;
-            
+            struct node;
+            typedef typename Allocator::template rebind<node>::other node_allocator_type;
+            node_allocator_type my_allocator;
+            HashCompare my_hash_compare;
 
+            struct node : public node_base {
+                value_type item;
+                node (const Key& key) : item(key, T()) {}
+                node (const Key& key, const T& t) : item(key, t) {}
+                #if __TBB_CPP11_RVALUE_REF_PRESENT
+                node(const Key& key, T&& t) : item(key, std::move(t)) {}
+                node(value_type&& i) : item(std::move(i)) {}
+                #if __TBB_CPP11_VARIADIC_TEMPLATES_PRESENT
+                template<typename... Args>
+                node(Args&&... args) : item(std::forward<Args>(args)...) {}
+                #if _TBB_COPY_FROM_NON_CONST_REF_BROKEN
+                node(value_type& i) : item(const_cast<const value_type&>(i)) {}
+                #endif
+                #endif
+                #endif
+                )
+            }
         }
     }  
 }
