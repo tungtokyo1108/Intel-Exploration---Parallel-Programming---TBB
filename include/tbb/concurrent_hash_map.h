@@ -568,8 +568,50 @@ namespace tbb
                 #endif
                 #endif
                 )
+
+                node (const value_type& i) : item(i) {}
+
+                /*exception-safe allocation*/
+                void *operator new( size_t, node_allocator_type& a)
+                {
+                    void *ptr = a.allocate(1);
+                    if (!ptr)
+                    {
+                        tbb::internal::throw_exception(tbb::internal::eid_bad_alloc);
+                    }
+                    return ptr;
+                }
+
+                void operator delete(void *ptr, node_allocator_type& a)
+                {
+                    a.deallocate(static_cast<node*>(ptr),1);
+                }
+            };
+
+            void delete_node(node_base *n)
+            {
+                my_allocator.destroy(static_cast<node*>(n));
+                my_allocator.deallocate(static_cast<node*>(n),1);
             }
-        }
+
+            static node* allocate_node_copy_construct(node_allocator_type& allocator, const Key& key, const T *t)
+            {
+                return new(allocator) node(key, *t);
+            }
+
+            #if __TBB_CPP11_RVALUE_REF_PRESENT
+            static node* allocate_node_move_construct(node_allocator_type& allocator, const Key& key, const T *t)
+            {
+                return new(allocator) node(key, std::move(*const_cast<T*>(t)));
+            }
+            #if __TBB_CPP11_VARIADIC_TEMPLATES_PRESENT
+            template<typename... Args>
+            static node* allocate_node_emplace_construct(node_allocator_type& allocator, Args&&... args){
+                return  new( allocator ) node(std::forward<Args>(args)...);
+            }
+            #endif
+            #endif
+        };
     }  
 }
 #endif /* INCLUDE_TBB_CONCURRENT_HASH_MAP_H_ */
