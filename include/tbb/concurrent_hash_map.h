@@ -142,7 +142,7 @@ namespace tbb
                 {
                     return reinterpret_cast<uintptr_t>(ptr) > uintptr_t(63);
                 }
-                
+
                 static void init_buckets(segment_ptr_t ptr, size_type sz, bool is_initial)
                 {
                     if (is_initial) std::memset(static_cast<void*>(ptr), 0, sz*sizeof(bucket));
@@ -218,7 +218,7 @@ namespace tbb
                         }
                     }
                 }
-                
+
                 inline bool check_mask_race(const hashcode_t h, hashcode_t &m) const
                 {
                     hashcode_t m_now, m_old = m;
@@ -293,7 +293,7 @@ namespace tbb
                         swap(this->my_table[i], table.my_table[i]);
                     }
                 }
-            };
+            };       
 
             template <typename Iterator>
             class hash_map_range;    
@@ -398,7 +398,7 @@ namespace tbb
                    return old;
                }
            };
-            
+
            template <typename Container, typename Value>
            hash_map_iterator<Container, Value>::hash_map_iterator(const Container &map, size_t index, const bucket *b, node_base *n) :
                 my_map(&map),
@@ -488,8 +488,8 @@ namespace tbb
                 const Iterator& begin() const {return my_begin;}
                 const Iterator& end() const {return my_end;}
                 size_type grainsize() const {return my_grainsize;}
-            }; 
-            
+            };
+
             template <typename Iterator>
             void hash_map_range<Iterator>::set_midpoint() const {
                 // Split by groups of nodes
@@ -512,12 +512,12 @@ namespace tbb
                     "[my_begin, my_midpoint) range should not be empty");
             }
         }
-        
+
         #if _MSC_VER && !defined(__INTEL_COMPILER)
         #pragma warning(push)
         #pragma warning(disable: 4127)
         #endif
-        
+
         /**
          * Unordered map from Key to T
         */
@@ -611,7 +611,63 @@ namespace tbb
             }
             #endif
             #endif
+
+            static node* allocate_node_default_construct(node_allocator_type& allocator, const Key& key, const T*)
+            {
+                return new(allocator) node(key);
+            }
+
+            static node* do_not_allocate_node(node_allocator_type&, const Key&, const T*)
+            {
+                __TBB_ASSERT(false, "this dummy function should not be called");
+                return NULL;
+            }
+
+            node *search_bucket(const key_type& key, bucket *b) const 
+            {
+                node *n = static_cast<node*> (b->node_list);
+                while (is_valid(n) && !my_hash_compare.equal(key, n->item.first))
+                {
+                    n = static_cast<node*> (n->next);
+                }
+                __TBB_ASSERT(n != internal::rehash_req, "Search can be execured only for rehashed bucket");
+                return n;
+            }
+
+            class bucket_accessor : public bucket::scoped_t
+            {
+                bucket* my_b;
+                public:
+                bucket_accessor(concurrent_hash_map *base, const hashcode_t h, bool writer = false)
+                {
+                    acquire(base, h, writer);
+                }
+                inline void acquire(concurrent_hash_map* base, const hashcode_t h, bool writer = false)
+                {
+                    my_b = base->get_bucket(h);
+                    if (itt_load_word_with_acquire(my_b->node_list) == internal::rehash_req
+                        && try_acquire(my_b->mutex, true))
+                    {
+                        if (my_b->node_list == internal::rehash_req)
+                            base->rehash_bucket(my_b, h);
+                    }
+                    else 
+                    {
+                        bucket::scoped_t::acquire(my_b->mutex, writer);
+                    }
+                    __TBB_ASSERT(my_b->node_list != internal::rehash_req, NULL);
+                }
+                bool is_writer()
+                {
+                    return bucket::scoped_t::is_writer;
+                }
+                bucket *operator() ()
+                {
+                    return my_b;
+                }
+            };
         };
     }  
 }
+
 #endif /* INCLUDE_TBB_CONCURRENT_HASH_MAP_H_ */
