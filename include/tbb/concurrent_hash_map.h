@@ -634,6 +634,8 @@ namespace tbb
                 return n;
             }
 
+            /* To find, rehash, acquire a lock and access a bucket */
+
             class bucket_accessor : public bucket::scoped_t
             {
                 bucket* my_b;
@@ -666,6 +668,65 @@ namespace tbb
                     return my_b;
                 }
             };
+
+            void rehash_bucket(bucket *b_new, const hashcode_t h)
+            {
+                __TBB_ASSERT(*(intptr_t*)(&b_new->mutex), "b_new must be locked for write");
+                __TBB_ASSERT(h > 1, "The lowermost buckets can't be rehashed");
+                /* Mask rehashed */
+                __TBB_store_with_release(b_new->node_list, internal::empty_rehash);
+                /* Get parent mask from the top most bit */
+                hashcode_t mask = (1u << __TBB_Log2(h)) - 1;
+                #if __TBB_STATISTICS
+                    my_info_rehashes++;
+                #endif
+                bucket_accessor b_old(this, h&mask);
+                /* Get full mask for new bucket */
+                mask = (mask << 1) | 1;
+                __TBB_ASSERT((mask&(mask+1))==0 && (h & mask) == h, NULL);
+                restart: 
+                for (node_base **p = &b_old()->node_list, *n = __TBB_load_with_acquire(*p); is_valid(n); n = *p)
+                {
+                    hashcode_t c = my_hash_compare.hash(static_cast<node*>(n)->item.first);
+                #if TBB_USE_ASSERT
+                    hashcode_t bmask = h & (mask>>1);
+                    bmask = bmask==0 ? 1 : (1u<<(__TBB_Log2(bmask)+1)) - 1;
+                    __TBB_ASSERT((c & bmask) == (h & bmask), "hash() function changed for key in table");
+                #endif                
+                    if ((c & mask) == h)
+                    {
+                        if (!b_old.is_writer())
+                        {
+                            if (!b_old.upgrade_to_writer())
+                            {
+                                goto restart;
+                            }
+                            *p = n->next;
+                            add_to_bucket(b_new, n);
+                        }
+                        else
+                        {
+                            p = &n->next;
+                        }
+                    }
+                }
+            }
+
+            struct call_clear_on_leave
+            {
+                concurrent_hash_map *my_ch_map;
+                call_clear_on_leave(concurrent_hash_map *a_ch_map) : my_ch_map(a_ch_map) {}
+                void dismiss() {my_ch_map = 0;}
+                ~call_clear_on_leave()
+                {
+                    if (my_ch_map)
+                    {
+                        my_ch_map->clear();
+                    }
+                }
+            };
+
+            
         };
     }  
 }
