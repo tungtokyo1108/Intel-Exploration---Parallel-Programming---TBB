@@ -726,7 +726,126 @@ namespace tbb
                 }
             };
 
-            
+        public: 
+            class accessor;
+            // Combines data access, locking, and garbage collection 
+            class const_accessor : private node::scoped_t 
+            {
+                friend class concurrent_hash_map<Key, T, HashCompare, Allocator>;
+                friend class accessor;
+                public: 
+                    typedef const typename concurrent_hash_map::value_type value_type;
+                    bool empty() const {return !my_node;}
+
+                    void release() 
+                    {
+                        if (my_node)
+                        {
+                            node::scoped_t::release();
+                            my_node = 0;
+                        }
+                    }
+
+                    const_reference operator*() const 
+                    {
+                        __TBB_ASSERT(my_node, "attempt to dereference empty accessor");
+                        return my_node->item;
+                    }
+
+                    const_pointer operator->() const 
+                    {
+                        return &operator*();
+                    }
+
+                    const_accessor() : my_node(NULL) {}
+
+                    ~const_accessor() {
+                        my_node = NULL;
+                    }
+
+                protected: 
+                    bool is_writer() 
+                    {
+                        return node::scoped_t::is_writer;
+                    }
+                    node *my_node;
+                    hashcode_t my_hash;
+            };
+
+            class accessor : public const_accessor 
+            {
+                public: 
+                    typedef typename concurrent_hash_map::value_type value_type;
+                    reference operator*() const 
+                    {
+                        __TBB_ASSERT(this->my_node, "attempt to dereference empty accessor");
+                        return this->my_node->item;
+                    }
+
+                    pointer operator->() const 
+                    {
+                        return &operator*();
+                    }
+            };
+
+            explicit concurrent_hash_map(const allocator_type& a = allocator_type()) :
+                internal::hash_map_base(), my_allocator(a)
+            {}
+
+            explicit concurrent_hash_map(const HashCompare& compare, const allocator_type& a = allocator_type()) : 
+                internal::hash_map_base(), my_allocator(a), my_hash_compare(compare)
+            {}
+
+            concurrent_hash_map(size_type n, const allocator_type& a = allocator_type()) : 
+                internal::hash_map_base(), my_allocator(a)
+            {
+                reserve(n);
+            }
+
+            concurrent_hash_map(size_type n, const HashCompare& compare, const allocator_type& a = allocator_type()) : 
+                internal::hash_map_base(), my_allocator(a), my_hash_compare(compare)
+            {
+                reserve(n);
+            }
+
+            concurrent_hash_map(const concurrent_hash_map& table, const allocator_type& a = allocator_type()) :
+                internal::hash_map_base(), my_allocator(a)
+            {
+                call_clear_on_leave scope_guard(this);
+                internal_copy(table);
+                scope_guard.dismiss();
+            }
+
+        #if __TBB_CPP11_RVALUE_REF_PRESENT
+            concurrent_hash_map(concurrent_hash_map&& table)
+                : internal::hash_map_base(), my_allocator(std::move(table.get_allocator()))
+            {
+                swap(table);
+            }
+
+            concurrent_hash_map(concurrent_hash_map&& table, const allocator_type& a)
+                :internal::hash_map_base(), my_allocator(a)
+            {
+                if (a == table.get_allocator())
+                {
+                    this->swap(table);
+                }
+                else 
+                {
+                    call_clear_on_leave scope_guard(this);
+                    internal_copy(std::make_move_iterator(table.begin()), std::make_move_iterator(table.end()), table.size());
+                    scope_guard.dismiss();
+                }
+            }
+        #endif
+
+            template <typename I>
+            concurrent_hash_map(I first, I last, const allocator_type& a = allocator_type())
+                : internal::hash_map_base(), my_allocator(a)
+            {
+                call_clear_on_leave scope_guard(this);
+                
+            }
         };
     }  
 }
