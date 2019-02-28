@@ -844,9 +844,450 @@ namespace tbb
                 : internal::hash_map_base(), my_allocator(a)
             {
                 call_clear_on_leave scope_guard(this);
-                
+                internal_copy(first, last, std::distance(first, last));
+                scope_guard.dismiss();
+            }
+
+            template <typename I>
+            concurrent_hash_map(I first, I last, const HashCompare& compare, const allocator_type& a = allocator_type())
+                : internal::hash_map_base(), my_allocator(a), my_hash_compare(compare)
+            {
+                call_clear_on_leave scope_guard(this);
+                internal_copy(first, last, std::distance(first, last));
+                scope_guard.dismiss();
+            }
+
+            concurrent_hash_map& operator=(const concurrent_hash_map& table)
+            {
+                if (this != &table)
+                {
+                    clear();
+                    internal_copy(table);
+                }
+                return *this;
+            }
+
+        #if __TBB_CPP11_RVALUE_REF_PRESENT
+            concurrent_hash_map& operator=(concurrent_hash_map&& table)
+            {
+                if (this != &table)
+                {
+                    typedef typename tbb::internal::allocator_traits<allocator_type>::propagate_on_container_copy_assignment pocma_t;
+                    if (pocma_t::value || this->my_allocator == table.my_allocator)
+                    {
+                        concurrent_hash_map trash(std::move(*this));
+                        this->swap(table);
+                    }
+                    else 
+                    {
+                        concurrent_hash_map moved_copy(std::move(table), this->my_allocator);
+                        this->swap(moved_copy);
+                    }
+                }
+                return *this;
+            }
+        #endif
+
+            /**
+             * Parallel algorithm support
+            */
+            range_type range(size_type grainsize = 1)
+            {
+                return range_type(*this, grainsize);
+            }
+            const_range_type range(size_type grainsize=1) const 
+            {
+                return const_range_type(*this, grainsize);
+            }
+
+            /**
+             * STL support - not thread-safe methods
+            */
+            iterator begin() 
+            {
+                return iterator(*this, 0, my_embedded_segment, my_embedded_segment->node_list);
+            }
+            iterator end()
+            {
+                return iterator(*this, 0, 0, 0);
+            }
+            const_iterator begin() const 
+            {
+                return const_iterator(*this, 0, my_embedded_segment, my_embedded_segment->node_list);
+            }
+            const_iterator end() const 
+            {
+                return const_iterator(*this, 0, 0, 0);
+            }
+            std::pair<iterator, iterator> equal_range(const Key& key)
+            {
+                return internal_equal_range(key, end());
+            }
+            std::pair<const_iterator, const_iterator> equal_range(const Key& key) const
+            {
+                return internal_equal_range(key, end());
+            }
+            size_type size() const 
+            {
+                return my_size;
+            }
+            bool empty() const 
+            {
+                return my_size == 0;
+            }
+            size_type max_size() const 
+            {
+                return (~size_type(0)/sizeof(node);)
+            }
+            size_type bucket_count() const 
+            {
+                return my_mask + 1;
+            }
+            allocator_type get_allocator() const 
+            {
+                return this->my_allocator;
+            }
+            void swap(concurrent_hash_map& table);
+
+            /**
+             * Concurrent map operations
+            */
+
+            // Return count of items (0 or 1)
+            size_type count(const Key& key) const 
+            {
+                return const_cast<concurrent_hash_map*>(this)->lookup(false, key, NULL, NULL, false, &do_not_allocate_node);
+            }
+
+            // Find item and acquire a read look on the item 
+            bool find(const_accessor& result, const Key& key) const 
+            {
+                result.release();
+                return const_cast<concurrent_hash_map*>(this)->lookup(false, key, NULL, &result, false, &do_not_allocate_node);
+            }
+            bool find(accessor& result, const Key& key) 
+            {
+                result.release();
+                return lookup(false, key, NULL, &result, true, &do_not_allocate_node);
+            }
+
+            // Insert item (if not already present) and acquire a read/write lock on the item
+            bool insert(const_accessor& result, const Key& key)
+            {
+                result.release();
+                return lookup(true, key, NULL, &result, false, &allocate_node_default_construct);
+            }
+            bool insert(accessor& result, const Key& key)
+            {
+                result.release();
+                return lookup(true, key, NULL, &result, /*write*/ true, &allocate_node_default_construct);
+            }
+
+            // Insert item by copying if there is no such key present already and acquire a read/write lock 
+            bool insert(const_accessor& result, const value_type& value)
+            {
+                result.release();
+                return lookup(true, value.first, &value.second, &result, /*write*/ false, &allocate_node_copy_construct);
+            }
+            bool insert(accessor& result, const value_type& value)
+            {
+                result.release();
+                return lookup(true, value.first, &value.second, &result, /*write*/ true, &allocate_node_copy_construct);
+            }
+
+            bool insert(const value_type& value)
+            {
+                return lookup(true, value.first, &value.second, NULL, /*write*/ false, &allocate_node_copy_construct);
+            }
+
+            template <typename I>
+            void insert(I first, I last)
+            {
+                for (; first != last; ++first)
+                {
+                    insert(*first);
+                }
+            }
+        #if __TBB_INITIALIZER_LISTS_PRESENT
+            void insert(std::initializer_list<value_type> il)
+            {
+                insert(il.begin(), il.end());
+            }
+        #endif
+
+            bool erase(const Key& key);
+            bool erase(const_accessor& item_accessor)
+            {
+                return exclude(item_accessor);
+            }
+            bool erase(accessor& item_accessor)
+            {
+                return exclude(item_accessor);
+            }
+
+        protected:
+            bool lookup(bool op_insert, const Key& key, const T* t, const_accessor* result, bool write, 
+                        node* (*allocate_node)(node_allocator_type&, const Key&, const T*), node* tmp_n=0);
+            struct accessor_not_used{void release(){}};
+            friend const_accessor* accessor_location(accessor_not_used const&) {return NULL;}
+            friend const_accessor* accessor_location(const_accessor& a) {return &a;}
+
+            friend bool is_write_access_needed(accessor const&) {return true;}
+            friend bool is_write_access_needed(const_accessor const&) {return false;}
+            friend bool is_write_access_needed(accessor_not_used const&) {return false;}
+
+        #if __TBB_CPP11_RVALUE_REF_PRESENT
+            template <typename Accessor>
+            bool generic_move_insert(Accessor&& result, value_type&& value)
+            {
+                result.release();
+                return lookup(true, value.first, &value.second, accessor_location(result), 
+                                is_write_access_needed(result), &allocate_node_move_construct);
+            }
+        #if __TBB_CPP11_VARIADIC_TEMPLATES_PRESENT
+            template <typename Accessor, typename... Args>
+            bool generic_emplace(Accessor&& result, Args&&... args)
+            {
+                result.release();
+                node* node_ptr = allocate_node_emplace_construct(my_allocator, std::forward<Args>(args)...);
+                return lookup(true, node_ptr->item.first, NULL, accessor_location(result), 
+                                is_write_access_needed(result), &do_not_allocate_node, node_ptr);
+            }
+        #endif
+        #endif
+
+            bool exclude(const_accessor& item_accessor);
+            template <typename I>
+            std::pair<I,I> internal_equal_range(const Key& key, I end) const;
+
+            void internal_copy(const concurrent_hash_map& source);
+            template <typename I>
+            void internal_copy(I first, I last, size_type reserve_size);
+
+            const_pointer interanl_fast_find(const Key& key) const 
+            {
+                hashcode_t h = my_hash_compare.hash(key);
+                hashcode_t m = (hashcode_t) itt_load_word_with_acquire(my_mask);
+                node *n;
+            restart: 
+                __TBB_ASSERT((m&(m+1))==0, "data structure is invalid");
+                bucket *b = get_bucket(h & m);
+                if (itt_load_word_with_acquire(b->node_list) == internal::rehash_req)
+                {
+                    bucket::scoped_t lock;
+                    if (lock.try_acquire(b->mutex, /*write*/ true))
+                    {
+                        if (b->node_list == internal::rehash_req)
+                        {
+                            const_cast<concurrent_hash_map*>(this)->rehash_bucket(b, h & m);
+                        }
+                    }
+                    else 
+                    {
+                        lock.acquire(b->mutex, /*write*/ false);
+                    }
+                    __TBB_ASSERT(b->node_list != internal::rehash_req, NULL);
+                }
+                n = search_bucket(key,b);
+                if (n)
+                {
+                    return &n->item;
+                }
+                else if (check_mask_race(h,m)) 
+                {
+                    goto restart;
+                }
+                return 0;
             }
         };
+
+        template <typename Key, typename T, typename HashCompare, typename A>
+        bool concurrent_hash_map<Key, T, HashCompare, A>::lookup(bool op_insert, const Key& key, const T* t,
+            const_accessor* result, bool write, node* (*allocate_node)(node_allocator_type& , const Key&, const T*), node* tmp_n)
+        {
+            __TBB_ASSERT(!result || !result->my_node, NULL);
+            bool return_value;
+            hashcode_t const h = my_hash_compare.hash(key);
+            hashcode_t m = (hashcode_t) itt_load_word_with_acquire(my_mask);
+            segment_index_t grow_segment = 0;
+            node *n;
+            restart: 
+            {
+                __TBB_ASSERT((m&(m+1)) == 0, "data structure is invalid");
+                return_value = false;
+                bucket_accessor b(this, h & m);
+                n = search_bucket(key, b());
+                if (op_insert)
+                {
+                    if (!n)
+                    {
+                        if (!tmp_n)
+                        {
+                            tmp_n = allocate_node(my_allocator, key, t);
+                        }
+                        if (!b.is_writer() && !b.upgrade_to_writer())
+                        {
+                            n = search_bucket(key, b());
+                            if (is_valid(n))
+                            {
+                                b.downgrade_to_reader();
+                                goto exists;
+                            }
+                        }
+                        if (check_mask_race(h, m))
+                        {
+                            goto restart;
+                        }
+                        grow_segment = insert_new_node(b(), n = tmp_n, m);
+                        tmp_n = 0;
+                        return_value = true;
+                    }
+                }
+                else 
+                {
+                    if (!n)
+                    {
+                        if (check_mask_race(h, m))
+                        {
+                            goto restart;
+                        }
+                        return false;
+                    }
+                    return_value = true;
+                }
+            exists: 
+                if (!result) goto check_growth;
+                if (!result->try_acquire(n->mutex, write)) 
+                {
+                    for (tbb::internal::atomic_backoff backoff(true);;)
+                    {
+                        if (result->try_acquire(n->mutex, write)) break;
+                        if (!backoff.bounded_pause())
+                        {
+                            b.release();
+                            __TBB_ASSERT(!op_insert || !return_value, "Can't acquire new item in locked bucket?");
+                            __TBB_Yield();
+                            m = (hashcode_t) itt_load_word_with_acquire(my_mask);
+                            goto restart;
+                        }
+                    }
+                }
+            }
+            result->my_node = n;
+            result->my_hash = h;
+            check_growth: 
+                if (grow_segment)
+                {
+                #if __TBB_STATISTICS
+                    my_info_resizes++;
+                #endif
+                    enable_segment(grow_segment);
+                } 
+                if (tmp_n)
+                    delete_node(tmp_n);
+            return return_value;
+        }    
+
+        template <typename Key, typename T, typename HashCompare, typename A>
+        template <typename I>
+        std::pair<I,I> concurrent_hash_map<Key, T, HashCompare, A>::internal_equal_range(const Key& key, I end_) const 
+        {
+            hashcode_t h = my_hash_compare.hash(key);
+            hashcode_t m = my_mask;
+            __TBB_ASSERT((m&(m+1)) == 0, "data structure is invalid");
+            h &= m;
+            bucket *b = get_bucket(h);
+            while(b->node_list == internal::rehash_req)
+            {
+                // get parent mask from the topmost bit
+                m = (1u << __TBB_Log2(h)) - 1;
+                b = get_bucket(h &= m);
+            }
+            node *n = search_bucket(key, b);
+            if (!n)
+            {
+                return std::make_pair(end_, end_);
+            }
+            iterator lower(*this, h, b, n), upper(lower);
+            return std::make_pair(lower, ++upper);
+        }
+
+        template <typename Key, typename T, typename HashCompre, typename A>
+        bool concurrent_hash_map<Key, T, HashCompre, A>::exclude(const_accessor& item_accessor)
+        {
+            __TBB_ASSERT(item_accessor.my_node, NULL);
+            node_base *const n = item_accessor.my_node;
+            hashcode_t const h = item_accessor.my_hash;
+            hashcode_t m = (hashcode_t) itt_load_word_with_acquire(my_mask);
+            do {
+                bucket_accessor b(this, h&m, /*write*/ true);
+                node_base **p = &b()->node_list;
+                while(*p && *p != n)
+                {
+                    p = &(*p)->next;
+                }
+                if (!*p)
+                {
+                    if (check_mask_race(h,m))
+                        continue;
+                    item_accessor.release();
+                    return false;
+                }
+                __TBB_ASSERT(*p == n, NULL);
+                *p = n->next;
+                my_size--;
+                break;
+            } while(true);
+            if (!item_accessor.is_writer())
+            {
+                item_accessor.upgrade_to_writer();
+            }
+            item_accessor.release();
+            delete_node(n);
+            return true;
+        }
+
+        template <typename Key, typename T, typename HashCompare, typename A>
+        bool concurrent_hash_map<Key, T, HashCompare, A>::erase(const Key& key)
+        {
+            node_base *n;
+            hashcode_t const h = my_hash_compare.hash(key);
+            hashcode_t m = (hashcode_t) itt_load_word_with_acquire(my_mask);
+        restart: 
+            {
+                bucket_accessor b(this, h & m);
+            search:
+                node_base **p = &b()->node_list;
+                n = *p;
+                while(is_valid(n) && !my_hash_compare.equal(key, static_cast<node*>(n)->item.first)){
+                    p = &n->next;
+                    n = *p;
+                }
+                if (!n) 
+                {
+                    if (check_mask_race(h, m))
+                    {
+                        goto restart;
+                    }
+                    return false;
+                }
+                else if (!b.is_writer() && !b.upgrade_to_writer())
+                {
+                    if (check_mask_race(h,m))
+                    {
+                        goto restart;
+                    }
+                    goto search;
+                }
+                *p = n->next;
+                my_size--;
+            }
+            {
+                typename node::scoped_t item_locker(n->mutex, /*write*/ true);
+            }
+            delete_node(n);
+            return true;
+        }
     }  
 }
 
