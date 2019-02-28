@@ -1288,6 +1288,180 @@ namespace tbb
             delete_node(n);
             return true;
         }
+
+        template <typename Key, typename T, typename HashCompare, typename A>
+        void concurrent_hash_map<Key, T, HashCompare, A>::swap(concurrent_hash_map<Key,T,HashCompare,A>& table)
+        {
+            using std::swap;
+            swap(this->my_allocator, table.my_allocator);
+            swap(this->my_hash_compare, table.my_hash_compare);
+            internal_swap(table);
+        }
+
+        template <typename Key, typename T, typename HashCompare, typename A>
+        void concurrent_hash_map<Key, T, HashCompare, A>::rehash(size_type sz)
+        {
+            reserve(sz);
+            hashcode_t mask = my_mask;
+            hashcode_t b = (mask+1)>>1;
+            __TBB_ASSERT((b&(b-1))==0, NULL);
+            // only the last segment should be scanned for rehashing 
+            bucket *bp = get_bucket(b);
+            for (; b <= mask; b++, bp++)
+            {
+                node_base *n = bp->node_list;
+                __TBB_ASSERT(is_valid(n) || n == internal::empty_rehash || n == internal::rehash_req, "Broken internal structure");
+                __TBB_ASSERT(*reinterpret_cast<intptr_t*>(&bp->mutex) == 0, "concurrent or unexpectedly terminated operation during rehash() execution");
+                // rehash bucket, conditional because rehashing of a previous bucket my affect this one
+                if (n == internal::rehash_req)
+                {
+                    hashcode_t h = b;
+                    bucket *b_old = bp;
+                    do {
+                        __TBB_ASSERT(h > 1, "The lowermost buckets can not be rehashed");
+                        hashcode_t m = (1u << __TBB_Log2(h)) - 1;
+                        b_old = get_bucket(h &= m);
+                    }
+                    while(b_old->node_list == internal::rehash_req);
+                    // mark all non-rehashed children recursively across all segments 
+                    mark_rehashed_levels(h);
+                    for (node_base** p = &b_old->node_list, *q = *p; is_valid(q); q = *p)
+                    {
+                        hashcode_t c = my_hash_compare.hash(static_cast<node*>(q)->item.first);
+                        if ((c & mask) != h)
+                        {
+                            *p = q->next;
+                            bucket *b_new = get_bucket(c & mask);
+                            __TBB_ASSERT(b_new->node_list != internal::rehash_req, "hash() function changed for key in table or internal error");
+                            add_to_bucket(b_new, q);
+                        }
+                        else
+                        {
+                            p = &q->next;
+                        }
+                    }
+                }
+            }
+        #if TBB_USE_PERFORMANCE_WARNINGS
+            int current_size = int(my_size), buckets = int(mask)+1, empty_buckets = 0, overpopulated_buckets = 0;
+            static bool reported = false;
+        #endif
+        #if TBB_USE_ASSERT || TBB_USE_PERFORMANCE_WARNINGS
+            for( b = 0; b <= mask; b++ ) {// only last segment should be scanned for rehashing
+                if( b & (b-2) ) ++bp; // not the beginning of a segment
+                else bp = get_bucket( b );
+            node_base *n = bp->node_list;
+            __TBB_ASSERT( *reinterpret_cast<intptr_t*>(&bp->mutex) == 0, "concurrent or unexpectedly terminated operation during rehash() execution" );
+            __TBB_ASSERT( is_valid(n) || n == internal::empty_rehashed, "Broken internal structure" );
+        #if TBB_USE_PERFORMANCE_WARNINGS
+            if( n == internal::empty_rehashed ) empty_buckets++;
+            else if( n->next ) overpopulated_buckets++;
+        #endif
+        #if TBB_USE_ASSERT
+            for( ; is_valid(n); n = n->next ) {
+                hashcode_t h = my_hash_compare.hash( static_cast<node*>(n)->item.first ) & mask;
+                __TBB_ASSERT( h == b, "hash() function changed for key in table or internal error" );
+            }
+        #endif
+        }
+        #endif // TBB_USE_ASSERT || TBB_USE_PERFORMANCE_WARNINGS
+        #if TBB_USE_PERFORMANCE_WARNINGS
+            if( buckets > current_size) empty_buckets -= buckets - current_size;
+            else overpopulated_buckets -= current_size - buckets; // TODO: load_factor?
+            if( !reported && buckets >= 512 && ( 2*empty_buckets > current_size || 2*overpopulated_buckets > current_size ) ) {
+                tbb::internal::runtime_warning(
+                    "Performance is not optimal because the hash function produces bad randomness in lower bits in %s.\nSize: %d  Empties: %d  Overlaps: %d",
+            #if __TBB_USE_OPTIONAL_RTTI
+                typeid(*this).name(),
+            #else
+                "concurrent_hash_map",
+            #endif
+                current_size, empty_buckets, overpopulated_buckets );
+            reported = true;
+        }
+        #endif
+        }
+
+        template <typename Key, typename T, typename HashCompare, typename A>
+        void concurrent_hash_map<Key, T, HashCompare, A>::clear()
+        {
+            hashcode_t m = my_mask;
+            __TBB_ASSERT((m&(m+1))==0, "data structure is invalid");
+            my_size = 0;
+            segment_index_t s = segment_index_of(m);
+            __TBB_ASSERT(s+1 == pointers_per_table || !my_table[s+1], "wrong mask or concurrent grow");
+            cache_aligned_allocator<bucket> alloc;
+            do {
+                __TBB_ASSERT(is_valid(my_table[s]), "wrong mask or concurrent grow");
+                segment_ptr_t buckets_ptr = my_table[s];
+                size_type sz = segment_size(s ? s : 1);
+                for (segment_index_t i=0; i < sz; i++)
+                {
+                    for (node_base *n = buckets_ptr[i].node_list; is_valid(n); n = buckets_ptr[i].node_list)
+                    {
+                        buckets_ptr[i].node_list = n->next;
+                        delete_node(n);
+                    }
+                }
+                if (s >= first_block)
+                {
+                    alloc.deallocate(buckets_ptr, sz);
+                }
+                else if (s == embedded_block && embedded_block != first_block)
+                {
+                    alloc.deallocate(buckets_ptr, segment_size(first_block)-embedded_buckets);
+                }
+                if (s >= embedded_block) my_table[s] = 0;
+            } while(s-->0);
+            my_mask = embedded_buckets - 1;
+        }
+
+        template <typename Key, typename T, typename HashCompare, typename A>
+        void concurrent_hash_map<Key, T, HashCompare, A>::internal_copy(const concurrent_hash_map& source)
+        {
+            hashcode_t mask = source.my_mask;
+            if (my_mask == mask)
+            {
+                reserve(source.my_size);
+                bucket *dst = 0, *src = 0;
+                bool rehash_required = false;
+                for (hashcode_t k = 0; k <= mask; k++)
+                {
+                    if (k & (k-2)) ++dst, src++;
+                    else {dst = get_bucket(k); src = source.get_bucket(k);}
+                    __TBB_ASSERT(dst->node_list != internal::rehash_req, "Invalid bucket int destination table");
+                    node *n = static_cast<node*>(src->node_list);
+                    if (n == internal::rehash_req)
+                    {
+                        rehash_required = true;
+                        dst->node_list = internal::rehash_req;
+                    }
+                    else for (; n; n = static_cast<node*>(n->next))
+                    {
+                        add_to_bucket(dst, new(my_allocator)node(n->item.first, n->item.second));
+                        ++my_size;
+                    }
+                }
+                if (rehash_required) rehash();
+            } else internal_copy(source.begin(), source.end(), source.my_size);
+        }
+
+        template <typename Key, typename T, typename HashCompare, typename A>
+        template <typename I>
+        void concurrent_hash_map<Key, T, HashCompare, A>::internal_copy(I first, I second, size_type reserve_size)
+        {
+            reserve(reserve_size);
+            hashcode_t m = my_mask;
+            for (; first != last; ++first)
+            {
+                hashcode_t h = my_hash_compare.hash((*first).first);
+                bucket *b = get_bucket(h & m);
+                __TBB_ASSERT(b->node_list != internal::rehash_req, "Invalid bucket in destination table");
+                node *n = new(my_allocator node(*first);
+                add_to_bucket(b,n);
+                ++my_size;
+            }
+        }
     }  
 }
 
