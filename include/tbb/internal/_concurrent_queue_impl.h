@@ -303,6 +303,84 @@ namespace tbb
                 }
                 return *this;
             }
+
+            template <typename T>
+            void micro_queue<T>::invalidate_page_and_rethrow(ticket k)
+            {
+                /* Append an invalid page at address i so that no more pushes are allowed */
+                page* invalid_page = (page*)uintptr_t(1);
+                {
+                    spin_mutex::scoped_lock lock(page_mutex);
+                    itt_store_word_with_release(tail_counter, k + concurrent_queue_rep_base::n_queue+1);
+                    page* q = tail_page;
+                    if (is_valid_page(q))
+                    {
+                        q->next = invalid_page;
+                    }
+                    else 
+                    {
+                        head_page = invalid_page;
+                    }
+                    tail_page = invalid_page;
+                }
+                __TBB_RETHROW();
+            }
+
+            template <typename T>
+            concurrent_queue_rep_base::page* micro_queue<T>::make_copy(concurrent_queue_base_v3<T>& base, 
+                const concurrent_queue_rep_base::page* src_page, size_t begin_in_page, size_t end_in_page,
+                ticket& g_index, item_constructor_t construct_item)
+            {
+                concurrent_queue_page_allocator& pa = base;
+                page* new_page = pa.allocate_page();
+                new_page->next = NULL;
+                new_page->mask = src_page->mask;
+                for (; begin_in_page != end_in_page; ++begin_in_page, ++g_index)
+                {
+                    if (new_page->mask & uintptr_t(1)<<begin_in_page)
+                    {
+                        copy_item(*new_page, begin_in_page, *src_page, begin_in_page, construct_item);
+                    }
+                }
+                return new_page;
+            }
+
+            template <typename T>
+            class micro_queue_pop_finalizer: no_copy 
+            {
+                typedef concurrent_queue_rep_base::page page;
+                ticket my_ticket;
+                micro_queue<T>& my_queue;
+                page* my_page;
+                concurrent_queue_page_allocator& allocator;
+            public:     
+                micro_queue_pop_finalizer(micro_queue<T>& queue, concurrent_queue_base_v3<T>& b, ticket k, page* p)
+                    : my_ticket(k), my_queue(queue), my_page(p), allocator(b)
+                {}
+
+                ~micro_queue_pop_finalizer();
+            };
+
+            template <typename T>
+            micro_queue_pop_finalizer<T>::~micro_queue_pop_finalizer()
+            {
+                page* p = my_page;
+                if (is_valid_page(p))
+                {
+                    spin_mutex::scoped_lock lock(my_queue.page_mutex);
+                    page* q = p->next;
+                    my_queue.head_page = q;
+                    if (!is_valid_page(q))
+                    {
+                        my_queue.tail_page = NULL;
+                    }
+                }
+                itt_store_word_with_release(my_queue.head_counter, my_ticket);
+                if (is_valid_page(p))
+                {
+                    allocator.deallocate_page(p);
+                }
+            }
         }
     } 
 }
